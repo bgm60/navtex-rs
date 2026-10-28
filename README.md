@@ -43,7 +43,8 @@ navtex-cli live --config navtex.toml --level   # check the input level first
 
 `navtex.example.toml` is a ready-made settings file: copy it to `navtex.toml`
 and edit it. Ctrl+C stops decoding cleanly: the current line is ended, the
-logs are closed and the program exits with status 0.
+logs are closed and the program exits with status 0. It prints `Stopped by
+user.`, on the console normally and on the error stream in quiet mode.
 
 ## Command line
 
@@ -118,6 +119,22 @@ too), so the device list holds only what the system offers for recording. If a d
 says so; set the device's format to 48000 Hz in the system's sound settings.
 If the device disappears while running, the logs are closed and the program
 exits with status 1.
+
+The program asks the sound system for a buffer of a tenth of a second (the
+default on Windows is about a hundredth), and runs its audio thread at raised
+priority, so that a busy moment on the computer does not lose audio. If the
+device refuses the larger buffer, its own default is used.
+
+If audio is lost anyway, a warning is shown on its own line, with the UTC time:
+
+```
+2026-10-28 03:14:07 UTC: warning: audio buffer overrun: some audio may have been lost
+2026-10-28 03:15:07 UTC: warning: audio buffer overrun: 6 more in the last 60 s
+```
+
+The first overrun is reported at once; others in the next minute are counted
+and summarised, so a burst does not flood the console. Warnings go to the
+error stream, so they are shown even in quiet mode.
 
 Use `--level` to set the receiver's output level. The bar should sit about
 half way, and `CLIP` must not appear. When a signal is present the decoder

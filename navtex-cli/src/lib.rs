@@ -9,6 +9,7 @@ pub mod audio;
 pub mod config;
 pub mod console;
 pub mod level;
+pub mod overrun;
 pub mod lines;
 pub mod pipeline;
 pub mod quality;

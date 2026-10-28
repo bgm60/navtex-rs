@@ -153,7 +153,9 @@ fn main() -> ExitCode {
             }
         }
         Mode::Live => {
-            let warn = Box::new(|text: &str| eprintln!("warning: {text}"));
+            // Decoded text may be part-way along a line, so unless quiet, start a fresh one.
+            let gap = if quiet { "" } else { "\n" };
+            let warn = Box::new(move |line: &str| eprintln!("{gap}{line}"));
             match LiveSource::open(profile.device.as_ref(), rate, Arc::clone(&stop), warn) {
                 Ok(source) => {
                     say(&format!("Listening on {}... (Ctrl+C to stop)", source.description()));
@@ -208,7 +210,12 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
     if stop.load(Ordering::SeqCst) {
-        say("\n\nStopped by user.");
+        if quiet {
+            // Nothing else is on the console, so a short line on stderr is enough.
+            eprintln!("Stopped by user.");
+        } else {
+            say("\n\nStopped by user.");
+        }
     }
     ExitCode::SUCCESS
 }

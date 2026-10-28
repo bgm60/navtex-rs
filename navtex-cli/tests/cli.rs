@@ -434,6 +434,19 @@ fn the_level_meter_cannot_be_combined_with_quiet() {
     assert!(stderr(&output).contains("--level"), "{}", stderr(&output));
 }
 
+/// Waits (up to 10 s) for the program to have opened its database, which it
+/// does after installing its Ctrl+C handler; a signal sent earlier would kill it.
+#[cfg(unix)]
+fn wait_until_started(db: &std::path::Path) {
+    for _ in 0..200 {
+        if db.exists() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("the program did not start");
+}
+
 /// Ctrl+C in the middle of a recording: the text so far is kept, the logs are
 /// closed and the program says so and exits normally.
 ///
@@ -464,6 +477,7 @@ fn ctrl_c_stops_decoding_cleanly_and_keeps_the_logs() {
     let first = bytes.len() / 2;
     pipe.write_all(&bytes[..first]).unwrap();
     pipe.flush().unwrap();
+    wait_until_started(&db);
     std::thread::sleep(std::time::Duration::from_millis(700));
     assert!(Command::new("kill").args(["-INT", &pid]).status().unwrap().success());
     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -488,4 +502,42 @@ fn ctrl_c_stops_decoding_cleanly_and_keeps_the_logs() {
         .query_row("SELECT COUNT(*) FROM navtex_log", [], |r| r.get(0))
         .unwrap();
     assert!(rows >= 5, "{rows}");
+}
+
+/// In quiet mode nothing goes to the console, but a stop with Ctrl+C is
+/// still acknowledged, on stderr and without blank lines.
+#[cfg(unix)]
+#[test]
+fn ctrl_c_in_quiet_mode_says_stopped_by_user_on_stderr_only() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = TempDir::new("ctrlcq");
+    let fifo = dir.0.join("live.wav");
+    assert!(Command::new("mkfifo").arg(&fifo).status().unwrap().success(), "mkfifo failed");
+    let db = dir.0.join("q.db");
+    let config = write_config(&dir, &format!("mode = 'file'\nwav_file = {}\ndb_file = {}\n", literal(&fifo), literal(&db)));
+    let bytes = std::fs::read(vectors().join("real_clip1").join("input.wav")).unwrap();
+
+    let child = Command::new(env!("CARGO_BIN_EXE_navtex-cli"))
+        .args(["p", "--config", &config, "--quiet"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pid = child.id().to_string();
+    let mut pipe = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+    pipe.write_all(&bytes[..bytes.len() / 2]).unwrap();
+    pipe.flush().unwrap();
+    wait_until_started(&db);
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert!(Command::new("kill").args(["-INT", &pid]).status().unwrap().success());
+    // Give the program time to act on the signal before the input ends.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    drop(pipe);
+
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "", "quiet mode prints nothing on stdout");
+    assert_eq!(stderr(&output), "Stopped by user.\n");
 }
