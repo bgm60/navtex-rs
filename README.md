@@ -177,12 +177,29 @@ text-log and database contents, the settings loader and its messages, and the
 WAV reader), and test the program itself by running it. The reference files are
 data, and nothing needs Python to run the tests.
 
+## Message report
+
+`tools/navtex_report.py` is a separate Python script (Python 3, nothing to
+install) that reports how well the NAVTEX messages in a decoder database were
+received: how many have an intact `ZCZC` header, how many end with `NNNN`, and
+how noisy they are. It opens the database read-only, so it is safe to run
+while the decoder is writing to it.
+
+```
+python tools/navtex_report.py 490kHz.db
+python tools/navtex_report.py 490kHz.db --since 2026-10-01 --examples 3 --csv messages.csv
+python tools/test_navtex_report.py
+```
+
+See the top of the script for what the categories mean.
+
 ## Layout
 
 | Folder | Contents |
 |---|---|
 | `navtex-core/` | The decoder: front end, tone detection, bit clock, soft lock, character set. No dependencies. |
 | `navtex-cli/` | The program: settings, quality meter, line assembly, console, text log, database, WAV and live audio, level meter. |
+| `tools/` | Analysis scripts that read the decoder's databases (Python). |
 | `test-vectors/` | Reference recordings and the expected results. |
 
 ## Licence
