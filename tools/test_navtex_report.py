@@ -235,6 +235,127 @@ class ShiftedMarkers(unittest.TestCase):
         self.assertEqual("".join(report.FIGURE_OF_LETTER[c] for c in "NNNN"), ",,,,")
 
 
+class DamagedStarts(unittest.TestCase):
+    FORMS = {"ZCZC": "BA91", "+:+:": "2-68"}   # each form with a header that suits it
+
+    def damaged(self, form, position, mark):
+        return form[:position] + mark + form[position + 1:]
+
+    def test_one_unreadable_character_anywhere_in_either_form_is_accepted_with_a_valid_header(self):
+        for form, header in self.FORMS.items():
+            for position in range(4):
+                for mark in "~!":
+                    text = self.damaged(form, position, mark)
+                    with self.subTest(text=text):
+                        results, orphans = analyse(lines(text + " " + header, BODY, TEXT, "NNNN"))
+                        self.assertEqual(len(results), 1)
+                        m = results[0].message
+                        self.assertEqual((m.start_marker, m.start_received, m.start_damaged, m.end),
+                                         (form, text, True, "NNNN"))
+                        self.assertTrue(results[0].good_header)
+
+    def test_the_header_of_a_damaged_figures_start_is_decoded(self):
+        r = analyse(lines("+:+~ 2-68", BODY, TEXT, "NNNN"))[0][0]
+        self.assertEqual((r.header_kind, r.header, r.header_raw), ("figures_shifted", "WA68", "2-68"))
+
+    def test_real_examples(self):
+        cases = {"~CZC FA01": "FA01", "ZCZ~ EA13": "EA13", "~:+: 2-66": "WA66", "ZCZ~ OA91": "OA91",
+                 "~~~+~+~+: 1320": "QE20"}
+        for text, header in cases.items():
+            with self.subTest(text=text):
+                results, _ = analyse(lines(text, BODY, TEXT, "NNNN"))
+                self.assertEqual((len(results), results[0].header), (1, header))
+                self.assertTrue(results[0].message.start_damaged)
+
+    def test_without_a_valid_header_it_is_not_a_start(self):
+        cases = ["ZC~C", "ZC~C HELLO", "ZC~C B~91", "ZC~C BA!1", "ZC~C 9", "ZC~C BA9", "+:+~ 2-6",
+                 "+:+~ ~-29", "ZC~C OAKP", "ZC~C  BA91"]
+        for text in cases:
+            with self.subTest(text=text):
+                results, orphans = analyse(lines(text, BODY, TEXT, "NNNN"))
+                self.assertEqual((len(results), orphans), (0, 1))
+
+    def test_a_header_on_the_next_line_is_not_looked_at(self):
+        self.assertEqual(len(analyse(lines("ZC~C", "BA91", BODY, TEXT, "NNNN"))[0]), 0)
+
+    def test_digits_as_letters_is_a_valid_header_for_a_damaged_start(self):
+        r = analyse(lines("ZC~C MZOI", BODY, TEXT, "NNNN"))[0][0]
+        self.assertEqual((r.header_kind, r.header), ("digits_as_letters", "MZ98"))
+
+    def test_two_unreadable_characters_are_not_enough(self):
+        self.assertEqual(len(analyse(lines("Z~~C BA91", BODY, TEXT, "NNNN"))[0]), 0)
+
+    def test_mixed_letter_and_figure_forms_stay_unused(self):
+        self.assertEqual(len(analyse(lines("Z:Z~ BA91", BODY, TEXT, "NNNN"))[0]), 0)
+        self.assertEqual(len(analyse(lines("ZC~: BA91", BODY, TEXT, "NNNN"))[0]), 0)
+
+    def test_a_real_start_is_never_displaced_by_a_look_alike(self):
+        for text in ("Z~ZCZC BA91", "~CZCZC BA91", "ZCZ~ZCZC BA91", "ZC~ZCZC BA91"):
+            with self.subTest(text=text):
+                results, _ = analyse(lines(text, BODY, TEXT, "NNNN"))
+                self.assertEqual([(r.message.start_marker, r.message.start_damaged) for r in results],
+                                 [("ZCZC", False)])
+
+    def test_a_look_alike_overlapping_a_real_marker_is_not_a_second_start(self):
+        for text in ("ZCZC~C BA91", "+:+:+~: 2-68"):
+            with self.subTest(text=text):
+                results, _ = analyse(lines(text, BODY, TEXT, "NNNN"))
+                self.assertEqual([(r.message.start_received, r.message.start_damaged) for r in results],
+                                 [(text[:4], False)])
+                self.assertEqual(report.count_markers(self.read(text))["damaged_used"], 0)
+
+    def read(self, text):
+        path = make_db(lines(text))
+        self.addCleanup(os.remove, path)
+        return report.read_lines(path)
+
+    def test_a_damaged_start_ends_the_message_before_it(self):
+        results, _ = analyse(lines("ZCZC BA91", TEXT, "ZCZ~ EA13", TEXT, "NNNN"))
+        self.assertEqual([(r.message.end, r.header) for r in results], [("next_start", "BA91"), ("NNNN", "EA13")])
+
+    def test_a_damaged_start_with_junk_in_front_and_a_real_start_later_on_the_line(self):
+        results, _ = analyse(lines("XX~~ZCZ~ EA13", TEXT + "NNNN~ZCZC BA91", BODY, "NNNN"))
+        self.assertEqual([r.header for r in results], ["EA13", "BA91"])
+
+    def test_a_damaged_start_can_precede_an_nnnn_that_would_have_been_an_orphan(self):
+        self.assertEqual(analyse(lines(TEXT, "NNNN"))[1], 1)
+        results, orphans = analyse(lines("ZCZ~ EA13", TEXT, "NNNN"))
+        self.assertEqual((len(results), orphans), (1, 0))
+
+    def test_damaged_ends_are_not_used(self):
+        for end in ("NNN~", "~NNN", "N~NN", ",,,~", ",,~,"):
+            with self.subTest(end=end):
+                results, orphans = analyse(lines("ZCZC BA91", TEXT, end))
+                self.assertEqual(results[0].message.end, "data_end")
+
+    def test_exact_starts_are_marked_exact_in_the_csv(self):
+        path = make_db(lines("ZCZC BA91", BODY, TEXT, "NNNN") + lines("ZCZ~ EA13", BODY, TEXT, "NNNN", start=60))
+        target = path + ".csv"
+        self.addCleanup(os.remove, path)
+        self.addCleanup(os.remove, target)
+        report.build_report(path, csv_path=target)
+        with open(target, newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual([(r["start_kind"], r["start_received"], r["start_marker"]) for r in rows],
+                         [("exact", "ZCZC", "ZCZC"), ("damaged", "ZCZ~", "ZCZC")])
+
+    def test_the_markers_block_counts_damaged_starts_used_and_not_used(self):
+        path = make_db(lines("ZCZ~ EA13", BODY, TEXT, "NNNN") + lines("ZC~C", "+:+~ 2-68", "Z!ZC", start=60))
+        self.addCleanup(os.remove, path)
+        text = "\n".join(report.build_report(path))
+        self.assertRegex(text, r"damaged start, used\s+2\s+damaged, no header\s+2")
+        self.assertIn("Messages (ZCZC seen): 2 ", text)
+
+    def test_the_marker_counts_agree_with_what_segment_uses(self):
+        rows = lines("ZCZ~ EA13", "+:+~ 2-68", "ZC~C junk", "ZCZC BA91", "NNNN", "NNN~")
+        path = make_db(rows)
+        self.addCleanup(os.remove, path)
+        counts = report.count_markers(report.read_lines(path))
+        results, _ = analyse(rows)
+        self.assertEqual(counts["damaged_used"], sum(r.message.start_damaged for r in results))
+        self.assertEqual(counts["damaged_unused"], 1)
+
+
 class MixedMarkers(unittest.TestCase):
     def count(self, *texts):
         path = make_db(lines(*texts))

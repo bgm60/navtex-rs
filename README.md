@@ -186,6 +186,8 @@ how noisy they are. It opens the database read-only, so it is safe to run
 while the decoder is writing to it. Markers that arrived in figures mode
 (`+:+:` for `ZCZC`, `,,,,` for `NNNN`) are recognised too, and the header after
 a shifted `ZCZC` is decoded back to letters (the raw header is kept alongside).
+A `ZCZC` with one unreadable character (such as `ZC~C`) is accepted as a start
+only when a valid header follows it on the same line.
 
 ```
 python tools/navtex_report.py 490kHz.db

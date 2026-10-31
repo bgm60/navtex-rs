@@ -45,6 +45,15 @@ raw text is never changed; the CSV keeps the header as received next to the
 decoded one. Mixed forms (such as "Z:ZC" or "N,N,") are only counted in the
 "Markers seen" block, never used.
 
+Damaged starts: a start marker with exactly one character unreadable (~ or !),
+such as "ZC~C" or "+:+~", is accepted as a start when a valid header (ok,
+space_lost, digits_as_letters or figures_shifted) follows it on the same line.
+Without that header it is not accepted: on real data the header check cuts the
+chance rate from about 25% of matches to about 1%. A damaged start is never
+accepted for an end marker, because "NNN~" and the like turned out to occur no
+more often than chance. Damaged starts are counted in the "Markers seen" block
+(used, and not used for lack of a header) and marked in the CSV.
+
 Header kinds (the four characters after ZCZC):
   ok                two letters then two digits, e.g. "BA91"
   space_lost        as ok, but the space after ZCZC is missing
@@ -102,6 +111,13 @@ LETTER_OF_FIGURE = {figure: letter for letter, figure in FIGURE_OF_LETTER.items(
 START_MARKERS = ("ZCZC", "+:+:")
 END_MARKERS = ("NNNN", ",,,,")
 TOKEN = re.compile(r"(?P<start>ZCZC|\+:\+:)|(?P<end>NNNN|,,,,)")
+# A start marker with exactly one character unreadable: letters form, figures form.
+def _one_unreadable(word):
+    return "|".join(
+        "".join("[~!]" if i == k else re.escape(c) for i, c in enumerate(word)) for k in range(4))
+
+
+DAMAGED_START = {form: re.compile(_one_unreadable(form)) for form in START_MARKERS}
 # Any mixture of letter and figure forms; used only to count what is not used.
 MIXED_START = re.compile(r"[Z+][C:][Z+][C:]")
 MIXED_END = re.compile(r"[N,]{4}")
@@ -113,6 +129,8 @@ HEADER_KINDS = (
 END_KINDS = ("NNNN", "next_start", "gap", "data_end")
 NOISE_KINDS = ("clean", "noisy", "garbage", "empty")
 GOOD_HEADERS = ("ok", "space_lost", "figures_shifted")
+# The header kinds that make a damaged start believable.
+DAMAGED_START_HEADERS = ("ok", "space_lost", "digits_as_letters", "figures_shifted")
 
 
 @dataclass
@@ -121,6 +139,16 @@ class Line:
     time: datetime
     quality: int
     text: str
+
+
+@dataclass
+class Marker:
+    start: int
+    end: int
+    text: str            # as received
+    kind: str            # "start" or "end"
+    form: str            # the form it stands for: ZCZC, +:+:, NNNN or ,,,,
+    damaged: bool = False
 
 
 @dataclass
@@ -134,7 +162,9 @@ class Message:
     pieces: list = field(default_factory=list)
     qualities: dict = field(default_factory=dict)
     end: str = ""
-    start_marker: str = "ZCZC"   # "ZCZC" or "+:+:"
+    start_marker: str = "ZCZC"   # "ZCZC" or "+:+:" (the form a damaged start stands for)
+    start_received: str = ""     # the start as it arrived, e.g. "ZC~C"
+    start_damaged: bool = False
     end_marker: str = ""         # "NNNN" or ",,,,"; empty if it ended another way
 
 
@@ -191,10 +221,34 @@ def read_lines(path, since=None, until=None):
 # Cutting the lines into messages
 # ---------------------------------------------------------------------------
 
+def damaged_starts(text):
+    """Returns (accepted, rejected): the damaged starts in the text, split by
+    whether a valid header follows on the same line. Real markers are blanked
+    out first, so a damaged look-alike can never take the place of a real one."""
+    blanked = TOKEN.sub(lambda token: "\0" * len(token.group()), text)
+    accepted, rejected = [], []
+    for form, pattern in DAMAGED_START.items():
+        for match in pattern.finditer(blanked):
+            kind, _ = classify_header(text[match.end():], shifted=(form == "+:+:"))
+            marker = Marker(match.start(), match.end(), text[match.start():match.end()],
+                            "start", form, damaged=True)
+            (accepted if kind in DAMAGED_START_HEADERS else rejected).append(marker)
+    return accepted, rejected
+
+
+def find_markers(text):
+    """The markers in a line, in order: the real ones, and the damaged starts
+    that have a valid header after them."""
+    markers = [Marker(m.start(), m.end(), m.group(), m.lastgroup, m.group()) for m in TOKEN.finditer(text)]
+    markers += damaged_starts(text)[0]
+    return sorted(markers, key=lambda marker: marker.start)
+
+
 def segment(lines, max_gap=DEFAULT_MAX_GAP):
     """Returns (messages, orphan_ends): the messages in order, and how many
     NNNN were seen with no message open. A shifted marker ("+:+:" or ",,,,")
-    counts like its letter form."""
+    counts like its letter form, and a damaged start with a valid header
+    counts as a start."""
     gap_limit = timedelta(seconds=max_gap)
     messages = []
     current = None
@@ -215,20 +269,21 @@ def segment(lines, max_gap=DEFAULT_MAX_GAP):
             close("gap", previous)
         previous = line
         position = 0
-        for token in TOKEN.finditer(line.text):
-            before = line.text[position:token.start()]
-            position = token.end()
+        for token in find_markers(line.text):
+            before = line.text[position:token.start]
+            position = token.end
             if current is not None:
                 current.pieces.append(before)
                 current.qualities[line.id] = line.quality
-            if token.lastgroup == "start":
+            if token.kind == "start":
                 if current is not None:
                     close("next_start", line)
-                current = Message(line.id, line.time, pieces=[""], start_marker=token.group())
+                current = Message(line.id, line.time, pieces=[""], start_marker=token.form,
+                                  start_received=token.text, start_damaged=token.damaged)
             elif current is None:
                 orphans += 1
             else:
-                close("NNNN", line, token.group())
+                close("NNNN", line, token.form)
         if current is not None:
             # The rest of the line after the last marker (or all of a line with none).
             current.pieces.append(line.text[position:])
@@ -346,7 +401,8 @@ def classify(messages):
 
 def count_markers(lines):
     """Counts every marker in the lines, whether or not a message is open:
-    each pure form, and the mixed forms, which are only counted. The pure
+    each pure form, the damaged starts (used, and not used for lack of a
+    header), and the mixed forms, which are only counted. The pure
     forms are blanked out first so that a mixed form cannot hide a real one
     or be counted from part of one."""
     counts = Counter()
@@ -355,6 +411,9 @@ def count_markers(lines):
         for token in TOKEN.finditer(text):
             counts[token.group()] += 1
         blanked = TOKEN.sub(lambda token: "\0" * len(token.group()), text)
+        accepted, rejected = damaged_starts(text)
+        counts["damaged_used"] += len(accepted)
+        counts["damaged_unused"] += len(rejected)
         counts["mixed_start"] += len(MIXED_START.findall(blanked))
         counts["mixed_end"] += len(MIXED_END.findall(blanked))
     return counts
@@ -383,7 +442,8 @@ def summarise(results, orphans, line_count, first, last, markers=None):
         out += ["Markers seen",
                 f"  ZCZC                {markers['ZCZC']:>8}    NNNN                {markers['NNNN']:>8}",
                 f"  +:+: (figures)      {markers['+:+:']:>8}    ,,,, (figures)      {markers[',,,,']:>8}",
-                f"  mixed, not used     {markers['mixed_start']:>8}    mixed, not used     {markers['mixed_end']:>8}", ""]
+                f"  mixed, not used     {markers['mixed_start']:>8}    mixed, not used     {markers['mixed_end']:>8}",
+                f"  damaged start, used {markers['damaged_used']:>8}    damaged, no header  {markers['damaged_unused']:>8}", ""]
     out += table("Header", Counter(r.header_kind for r in results), HEADER_KINDS, total) + [""]
     out += table("Ending", Counter(r.message.end for r in results), END_KINDS, total) + [""]
     out += table("Text", Counter(r.noise_kind for r in results), NOISE_KINDS, total) + [""]
@@ -434,13 +494,15 @@ def write_csv(results, path):
         writer = csv.writer(handle)
         writer.writerow(["message", "start_id", "end_id", "start_time", "end_time", "header_kind",
                          "header", "end", "noise_kind", "noise_percent", "mean_quality",
-                         "start_marker", "end_marker", "header_raw", "header_repair"])
+                         "start_marker", "end_marker", "header_raw", "header_repair",
+                         "start_kind", "start_received"])
         for number, r in enumerate(results, 1):
             m = r.message
             writer.writerow([number, m.start_id, m.end_id, f"{m.start_time:%Y-%m-%d %H:%M:%S}",
                              f"{m.end_time:%Y-%m-%d %H:%M:%S}", r.header_kind, r.header, m.end,
                              r.noise_kind, f"{100 * r.noise_share:.1f}", f"{r.mean_quality:.0f}",
-                             m.start_marker, m.end_marker, r.header_raw, r.header_repair])
+                             m.start_marker, m.end_marker, r.header_raw, r.header_repair,
+                             "damaged" if m.start_damaged else "exact", m.start_received])
 
 
 def build_report(path, since=None, until=None, max_gap=DEFAULT_MAX_GAP, how_many=0, csv_path=None):
