@@ -18,6 +18,7 @@ import csv
 import hashlib
 import io
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -127,6 +128,141 @@ class Classifying(unittest.TestCase):
         self.assertAlmostEqual(report.noise("A" * 8 + "~!")[1], 0.2)
 
 
+class ShiftedMarkers(unittest.TestCase):
+    def test_both_forms_of_each_marker_start_and_end_a_message(self):
+        for start in ("ZCZC", "+:+:"):
+            for end in ("NNNN", ",,,,"):
+                with self.subTest(start=start, end=end):
+                    results, orphans = analyse(lines(start + " BA91", BODY, TEXT, end))
+                    self.assertEqual((len(results), orphans, results[0].message.end), (1, 0, "NNNN"))
+                    self.assertEqual((results[0].message.start_marker, results[0].message.end_marker),
+                                     (start, end))
+
+    def test_a_shifted_end_with_no_message_open_is_counted(self):
+        self.assertEqual(analyse(lines(TEXT, ",,,,"))[1], 1)
+
+    def test_a_shifted_end_glued_to_the_last_line(self):
+        results, _ = analyse(lines("+:+: 2-68", BODY, TEXT + ",,,,"))
+        self.assertEqual(results[0].message.end, "NNNN")
+        self.assertEqual(results[0].noise_kind, "clean")
+
+    def test_a_shifted_start_ends_the_message_before_it(self):
+        results, _ = analyse(lines("ZCZC BA91", TEXT, "+:+: 2-68", TEXT, "NNNN"))
+        self.assertEqual([r.message.end for r in results], ["next_start", "NNNN"])
+
+    def test_five_commas_are_one_end_and_a_stray_comma(self):
+        results, orphans = analyse(lines("ZCZC BA91", TEXT + ",,,,,"))
+        self.assertEqual((results[0].message.end, orphans), ("NNNN", 0))
+
+    def test_the_shifted_header_is_decoded(self):
+        cases = {  # real examples from the databases
+            "+:+: \x07-13": ("JA13", "\x07-13"),
+            "+:+: .+00": ("MZ00", ".+00"),
+            "+:+: ,-72": ("NA72", ",-72"),
+            "+:+: 2-68": ("WA68", "2-68"),
+            "+:+: 9-91": ("OA91", "9-91"),
+            "+:+:2-68": ("WA68", "2-68"),  # the space may be lost
+        }
+        for text, (decoded, raw) in cases.items():
+            with self.subTest(text=text):
+                results, _ = analyse(lines(text, BODY, TEXT, "NNNN"))
+                r = results[0]
+                self.assertEqual((r.header_kind, r.header, r.header_raw, r.header_repair),
+                                 ("figures_shifted", decoded, raw, "figures"))
+                self.assertTrue(r.good_header)
+
+    def test_the_shifted_header_may_arrive_on_the_next_line(self):
+        results, _ = analyse(lines("+:+:", "2-68", BODY, TEXT, "NNNN"))
+        self.assertEqual((results[0].header_kind, results[0].header), ("figures_shifted", "WA68"))
+
+    def test_shifted_headers_that_cannot_be_decoded_are_not_guessed(self):
+        cases = {
+            "+:+: ~-68": "has_noise",   # could be D, F, G or H: left alone
+            "+:+: 2!68": "has_noise",
+            "+:+: 2-6": "other",
+            "+:+: 2-QW": "other",       # the digits must be digits
+            "+:+: 2D68": "other",       # D has no figure
+        }
+        for text, kind in cases.items():
+            with self.subTest(text=text):
+                r = analyse(lines(text, BODY, TEXT, "NNNN"))[0][0]
+                self.assertEqual((r.header_kind, r.header, r.header_repair), (kind, r.header_raw, "none"))
+                self.assertFalse(r.good_header)
+
+    def test_figures_in_the_header_of_an_ordinary_start_are_not_decoded(self):
+        r = analyse(lines("ZCZC 2-68", BODY, TEXT, "NNNN"))[0][0]
+        self.assertEqual((r.header_kind, r.header_repair), ("other", "none"))
+
+    def test_an_ordinary_header_after_a_shifted_start_is_still_ok(self):
+        r = analyse(lines("+:+: BA91", BODY, TEXT, "NNNN"))[0][0]
+        self.assertEqual((r.header_kind, r.header, r.header_repair), ("ok", "BA91", "none"))
+
+    def test_digits_as_letters_is_decoded_but_still_not_a_good_header(self):
+        r = analyse(lines("ZCZC MZOI", BODY, TEXT, "NNNN"))[0][0]
+        self.assertEqual((r.header, r.header_raw, r.header_repair, r.good_header),
+                         ("MZ98", "MZOI", "digits_as_letters", False))
+
+    def test_every_digit_key_decodes(self):
+        for key, digit in zip("QWERTYUIOP", "1234567890"):
+            with self.subTest(key=key):
+                self.assertEqual(report.decode_header("digits_as_letters", "AB" + key + "Q"),
+                                 ("AB" + digit + "1", "digits_as_letters"))
+
+    def test_every_figure_glyph_decodes(self):
+        for letter, figure in report.FIGURE_OF_LETTER.items():
+            with self.subTest(letter=letter):
+                self.assertEqual(report.decode_header("figures_shifted", figure + "-12"),
+                                 (letter + "A12", "figures"))
+
+    def test_the_raw_header_is_kept_for_headers_that_are_not_repaired(self):
+        r = analyse(lines("ZCZC BA91", BODY, TEXT, "NNNN"))[0][0]
+        self.assertEqual((r.header, r.header_raw, r.header_repair), ("BA91", "BA91", "none"))
+
+    def test_the_figure_table_agrees_with_the_decoders_charset(self):
+        source = Path(__file__).resolve().parent.parent / "navtex-core" / "src" / "charset.rs"
+        if not source.exists():
+            self.skipTest("navtex-core/src/charset.rs is not next to the tools folder")
+        found = re.findall(r"\(0b[01]+, '(.)', Some\('(\\x07|\\'|.)'\)\)", source.read_text(encoding="utf-8"))
+        table = {letter: "\x07" if figure == "\\x07" else figure.replace("\\'", "'") for letter, figure in found}
+        self.assertEqual(len(table), 22)  # D, F, G, H have no figure
+        self.assertEqual(table, report.FIGURE_OF_LETTER)
+
+    def test_the_figure_table_is_one_to_one(self):
+        self.assertEqual(len(report.LETTER_OF_FIGURE), len(report.FIGURE_OF_LETTER))
+        for letter, figure in report.FIGURE_OF_LETTER.items():
+            self.assertEqual(report.LETTER_OF_FIGURE[figure], letter)
+        self.assertEqual("".join(report.FIGURE_OF_LETTER[c] for c in "ZCZC"), "+:+:")
+        self.assertEqual("".join(report.FIGURE_OF_LETTER[c] for c in "NNNN"), ",,,,")
+
+
+class MixedMarkers(unittest.TestCase):
+    def count(self, *texts):
+        path = make_db(lines(*texts))
+        try:
+            return report.count_markers(report.read_lines(path))
+        finally:
+            os.remove(path)
+
+    def test_pure_forms_are_counted(self):
+        c = self.count("ZCZC BA91", "+:+: 2-68", "NNNN", ",,,,", ",,,,")
+        self.assertEqual((c["ZCZC"], c["+:+:"], c["NNNN"], c[",,,,"]), (1, 1, 1, 2))
+        self.assertEqual((c["mixed_start"], c["mixed_end"]), (0, 0))
+
+    def test_mixed_forms_are_counted_but_do_not_start_or_end_anything(self):
+        rows = lines("Z:ZC BA91", "ZC+: BA91", TEXT, "N,N,", "NN,,")
+        c = self.count(*[r[2] for r in rows])
+        self.assertEqual((c["mixed_start"], c["mixed_end"]), (2, 2))
+        results, orphans = analyse(rows)
+        self.assertEqual((len(results), orphans), (0, 0))
+
+    def test_a_mixed_look_alike_cannot_hide_or_be_counted_from_a_real_marker(self):
+        c = self.count("N,NNNN", "+ZCZC", "Z:+:+:")
+        self.assertEqual((c["NNNN"], c["mixed_end"]), (1, 0))
+        self.assertEqual((c["ZCZC"], c["+:+:"], c["mixed_start"]), (1, 1, 0))
+        # and the real end is still found
+        self.assertEqual(analyse(lines("ZCZC BA91", "N,NNNN"))[0][0].message.end, "NNNN")
+
+
 class Segmenting(unittest.TestCase):
     def test_nnnn_on_the_end_of_a_line_ends_the_message_and_is_not_part_of_its_text(self):
         read = [report.Line(i, START, 50, t) for i, t in enumerate(["ZCZC BA91", "HELLO 26NNNN", "ZCZC BA92"], 1)]
@@ -219,6 +355,19 @@ class Reporting(unittest.TestCase):
         self.assertIn("Distinct headers: 2   seen once: 1   twice: 1   three or more: 0", text)
         self.assertIn("B:2  G:1", text)
 
+    def test_the_markers_block_and_the_shifted_header_row_are_reported(self):
+        path = make_db(lines("ZCZC BA91", BODY, TEXT, "NNNN") +
+                       lines("+:+: 2-68", BODY, TEXT, ",,,,", start=60) +
+                       lines("Z:ZC", "N,N,", start=120))
+        self.addCleanup(os.remove, path)
+        text = "\n".join(report.build_report(path))
+        self.assertRegex(text, r"ZCZC\s+1\s+NNNN\s+1")
+        self.assertRegex(text, r"\+:\+: \(figures\)\s+1\s+,,,, \(figures\)\s+1")
+        self.assertRegex(text, r"mixed, not used\s+1\s+mixed, not used\s+1")
+        self.assertRegex(text, r"figures_shifted\s+1\s+50\.0%")
+        self.assertIn("Messages (ZCZC seen): 2   NNNN with no message open: 0", text)
+        self.assertIn("Station letter (B1), good headers:  B:1  W:1", text)
+
     def test_since_and_until_limit_the_lines(self):
         self.assertIn("Messages (ZCZC seen): 2 ", self.text(since=report.parse_time("2026-10-18 12:01:00")
                                                             , until=report.parse_time("2026-10-18 12:03:00")))
@@ -238,7 +387,11 @@ class Reporting(unittest.TestCase):
         with open(target, newline="", encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
         self.assertEqual(len(rows), 4)
-        self.assertEqual([r["header"] for r in rows], ["BA91", "BA91", "GB07", "MZOI"])
+        self.assertEqual([r["header"] for r in rows], ["BA91", "BA91", "GB07", "MZ98"])
+        self.assertEqual([r["header_raw"] for r in rows], ["BA91", "BA91", "GB07", "MZOI"])
+        self.assertEqual([r["header_repair"] for r in rows], ["none", "none", "none", "digits_as_letters"])
+        self.assertEqual([r["start_marker"] for r in rows], ["ZCZC"] * 4)
+        self.assertEqual([r["end_marker"] for r in rows], ["NNNN", "NNNN", "NNNN", ""])
         self.assertEqual(rows[3]["header_kind"], "digits_as_letters")
         self.assertEqual(rows[3]["end"], "gap")
         self.assertEqual(rows[2]["noise_kind"], "garbage")

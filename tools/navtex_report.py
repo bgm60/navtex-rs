@@ -36,12 +36,24 @@ A *message* runs from a ZCZC to the next NNNN. It also ends, without an NNNN,
 when another ZCZC starts, when no line arrives for --max-gap seconds, or when
 the data ends.
 
+Shifted markers: if the decoder is in figures mode when a marker arrives, the
+letters Z, C and N print as the figures on their keys, so ZCZC shows as
+"+:+:" and NNNN as ",,,,". Both forms are accepted as markers. A start of
+"+:+:" also means the header after it is shifted: its two letters arrive as
+figures and are turned back into letters (for example "9-91" is OA91). The
+raw text is never changed; the CSV keeps the header as received next to the
+decoded one. Mixed forms (such as "Z:ZC" or "N,N,") are only counted in the
+"Markers seen" block, never used.
+
 Header kinds (the four characters after ZCZC):
   ok                two letters then two digits, e.g. "BA91"
   space_lost        as ok, but the space after ZCZC is missing
   digits_as_letters the digits arrived as the letters on the same keys
                     (Q=1 W=2 E=3 R=4 T=5 Y=6 U=7 I=8 O=9 P=0), i.e. a figure
                     shift was lost, e.g. "MZOI" for "MZ98"
+  figures_shifted   the start was "+:+:" and the header is two figures
+                    (the letters' figure-mode glyphs) then two digits, e.g.
+                    "9-91" for "OA91"; decoded back to letters
   extra_char        a well-formed header preceded by one stray character
   has_noise         the decoder marked a header character as unreadable (~ or !)
   symbol_in_number  the number holds symbols or one digit and one symbol
@@ -54,8 +66,8 @@ Noise kinds (share of the message's characters that are ~ or !):
   noisy             1% to under 10%
   garbage           10% or more
 
-A message counts as having a *good header* when its header is ok or
-space_lost. Whether the letters are the right letters cannot be known: a
+A message counts as having a *good header* when its header is ok, space_lost
+or figures_shifted (which is listed separately in the report). Whether the letters are the right letters cannot be known: a
 damaged B1 or B2 is still a letter.
 
 Exit status: 0 on success, 1 if the database cannot be read, 2 for a mistake
@@ -76,15 +88,31 @@ DEFAULT_MAX_GAP = 600
 UNREADABLE = "~!"
 # The letters whose keys carry the digits 1 2 3 4 5 6 7 8 9 0 in figures mode.
 FIGURE_KEYS = "QWERTYUIOP"
-TOKEN = re.compile(r"ZCZC|NNNN")
+KEY_TO_DIGIT = dict(zip(FIGURE_KEYS, "1234567890"))
+# What each letter prints as in figures mode (the decoder's charset.rs; D, F, G
+# and H have no figure). Z, C and N matter for the markers: ZCZC is "+:+:" and
+# NNNN is ",,,,".
+FIGURE_OF_LETTER = {
+    "A": "-", "B": "?", "C": ":", "E": "3", "I": "8", "J": "\x07", "K": "(",
+    "L": ")", "M": ".", "N": ",", "O": "9", "P": "0", "Q": "1", "R": "4",
+    "S": "'", "T": "5", "U": "7", "V": "=", "W": "2", "X": "/", "Y": "6",
+    "Z": "+",
+}
+LETTER_OF_FIGURE = {figure: letter for letter, figure in FIGURE_OF_LETTER.items()}
+START_MARKERS = ("ZCZC", "+:+:")
+END_MARKERS = ("NNNN", ",,,,")
+TOKEN = re.compile(r"(?P<start>ZCZC|\+:\+:)|(?P<end>NNNN|,,,,)")
+# Any mixture of letter and figure forms; used only to count what is not used.
+MIXED_START = re.compile(r"[Z+][C:][Z+][C:]")
+MIXED_END = re.compile(r"[N,]{4}")
 
 HEADER_KINDS = (
-    "ok", "space_lost", "digits_as_letters", "extra_char",
+    "ok", "space_lost", "digits_as_letters", "figures_shifted", "extra_char",
     "has_noise", "symbol_in_number", "other", "missing",
 )
 END_KINDS = ("NNNN", "next_start", "gap", "data_end")
 NOISE_KINDS = ("clean", "noisy", "garbage", "empty")
-GOOD_HEADERS = ("ok", "space_lost")
+GOOD_HEADERS = ("ok", "space_lost", "figures_shifted")
 
 
 @dataclass
@@ -106,6 +134,8 @@ class Message:
     pieces: list = field(default_factory=list)
     qualities: dict = field(default_factory=dict)
     end: str = ""
+    start_marker: str = "ZCZC"   # "ZCZC" or "+:+:"
+    end_marker: str = ""         # "NNNN" or ",,,,"; empty if it ended another way
 
 
 # ---------------------------------------------------------------------------
@@ -163,16 +193,18 @@ def read_lines(path, since=None, until=None):
 
 def segment(lines, max_gap=DEFAULT_MAX_GAP):
     """Returns (messages, orphan_ends): the messages in order, and how many
-    NNNN were seen with no message open."""
+    NNNN were seen with no message open. A shifted marker ("+:+:" or ",,,,")
+    counts like its letter form."""
     gap_limit = timedelta(seconds=max_gap)
     messages = []
     current = None
     previous = None
     orphans = 0
 
-    def close(kind, line):
+    def close(kind, line, marker=""):
         nonlocal current
         current.end = kind
+        current.end_marker = marker
         current.end_id = line.id
         current.end_time = line.time
         messages.append(current)
@@ -189,14 +221,14 @@ def segment(lines, max_gap=DEFAULT_MAX_GAP):
             if current is not None:
                 current.pieces.append(before)
                 current.qualities[line.id] = line.quality
-            if token.group() == "ZCZC":
+            if token.lastgroup == "start":
                 if current is not None:
                     close("next_start", line)
-                current = Message(line.id, line.time, pieces=[""])
+                current = Message(line.id, line.time, pieces=[""], start_marker=token.group())
             elif current is None:
                 orphans += 1
             else:
-                close("NNNN", line)
+                close("NNNN", line, token.group())
         if current is not None:
             # The rest of the line after the last marker (or all of a line with none).
             current.pieces.append(line.text[position:])
@@ -210,10 +242,12 @@ def segment(lines, max_gap=DEFAULT_MAX_GAP):
 # Classifying
 # ---------------------------------------------------------------------------
 
-def classify_header(text, space=None):
+def classify_header(text, space=None, shifted=False):
     """Returns (kind, header) where header is the four characters that were
-    taken to be B1B2B3B4 ('' if none). `space` says whether the space after
-    ZCZC arrived; if it is not given, it is read from the text."""
+    taken to be B1B2B3B4, as received ('' if none). `space` says whether the
+    space after ZCZC arrived; if it is not given, it is read from the text.
+    `shifted` says the start marker was "+:+:", so the two letters are
+    expected as figures."""
     if space is None:
         space = text.startswith(" ")
     rest = text[1:] if text.startswith(" ") else text
@@ -225,6 +259,9 @@ def classify_header(text, space=None):
         return (len(chars) == 4 and chars[0].isascii() and chars[0].isalpha() and chars[1].isascii()
                 and chars[1].isalpha() and chars[2:].isascii() and chars[2:].isdigit())
 
+    if shifted and len(four) == 4 and all(c in LETTER_OF_FIGURE for c in four[:2]) \
+            and four[2:].isascii() and four[2:].isdigit():
+        return "figures_shifted", four
     if well_formed(four):
         return ("ok" if space else "space_lost"), four
     if (len(four) == 4 and four[:2].isalpha() and four[:2].isascii()
@@ -238,6 +275,17 @@ def classify_header(text, space=None):
             and any(not c.isalnum() or c.isdigit() for c in four[2:])):
         return "symbol_in_number", four
     return "other", four
+
+
+def decode_header(kind, header):
+    """Returns (decoded, repair): the header with its shift undone, and which
+    repair was made ("none", "figures" or "digits_as_letters"). The header as
+    received is not touched; the caller keeps both."""
+    if kind == "figures_shifted":
+        return "".join(LETTER_OF_FIGURE[c] for c in header[:2]) + header[2:], "figures"
+    if kind == "digits_as_letters":
+        return header[:2] + "".join(KEY_TO_DIGIT[c] for c in header[2:]), "digits_as_letters"
+    return header, "none"
 
 
 def noise(text):
@@ -260,6 +308,8 @@ class Result:
     header: str
     noise_kind: str
     noise_share: float
+    header_raw: str = ""         # the four characters as received
+    header_repair: str = "none"  # "none", "figures" or "digits_as_letters"
 
     @property
     def good_header(self):
@@ -275,21 +325,39 @@ def header_of(message):
     """Classifies the header. It normally follows ZCZC on the same line; if
     ZCZC ended its line, the first text on a later line is used, and the
     line break stands in for the space."""
+    shifted = message.start_marker != "ZCZC"
     for number, piece in enumerate(message.pieces[1:]):
         if piece.strip():
-            return classify_header(piece, space=True if number else None)
+            return classify_header(piece, space=True if number else None, shifted=shifted)
     return "missing", ""
 
 
 def classify(messages):
     results = []
     for message in messages:
-        kind, header = header_of(message)
+        kind, raw = header_of(message)
+        header, repair = decode_header(kind, raw)
         # Everything after ZCZC, joined by the line breaks it had.
         body = "\n".join(message.pieces[1:])
         noise_kind, share = noise(body)
-        results.append(Result(message, kind, header, noise_kind, share))
+        results.append(Result(message, kind, header, noise_kind, share, raw, repair))
     return results
+
+
+def count_markers(lines):
+    """Counts every marker in the lines, whether or not a message is open:
+    each pure form, and the mixed forms, which are only counted. The pure
+    forms are blanked out first so that a mixed form cannot hide a real one
+    or be counted from part of one."""
+    counts = Counter()
+    for line in lines:
+        text = line.text
+        for token in TOKEN.finditer(text):
+            counts[token.group()] += 1
+        blanked = TOKEN.sub(lambda token: "\0" * len(token.group()), text)
+        counts["mixed_start"] += len(MIXED_START.findall(blanked))
+        counts["mixed_end"] += len(MIXED_END.findall(blanked))
+    return counts
 
 
 # ---------------------------------------------------------------------------
@@ -307,10 +375,15 @@ def table(title, counts, order, total):
     return lines
 
 
-def summarise(results, orphans, line_count, first, last):
+def summarise(results, orphans, line_count, first, last, markers=None):
     total = len(results)
     out = [f"Lines read: {line_count}" + (f"   from {first} to {last} UTC" if first else ""),
            f"Messages (ZCZC seen): {total}   NNNN with no message open: {orphans}", ""]
+    if markers is not None:
+        out += ["Markers seen",
+                f"  ZCZC                {markers['ZCZC']:>8}    NNNN                {markers['NNNN']:>8}",
+                f"  +:+: (figures)      {markers['+:+:']:>8}    ,,,, (figures)      {markers[',,,,']:>8}",
+                f"  mixed, not used     {markers['mixed_start']:>8}    mixed, not used     {markers['mixed_end']:>8}", ""]
     out += table("Header", Counter(r.header_kind for r in results), HEADER_KINDS, total) + [""]
     out += table("Ending", Counter(r.message.end for r in results), END_KINDS, total) + [""]
     out += table("Text", Counter(r.noise_kind for r in results), NOISE_KINDS, total) + [""]
@@ -360,12 +433,14 @@ def write_csv(results, path):
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(["message", "start_id", "end_id", "start_time", "end_time", "header_kind",
-                         "header", "end", "noise_kind", "noise_percent", "mean_quality"])
+                         "header", "end", "noise_kind", "noise_percent", "mean_quality",
+                         "start_marker", "end_marker", "header_raw", "header_repair"])
         for number, r in enumerate(results, 1):
             m = r.message
             writer.writerow([number, m.start_id, m.end_id, f"{m.start_time:%Y-%m-%d %H:%M:%S}",
                              f"{m.end_time:%Y-%m-%d %H:%M:%S}", r.header_kind, r.header, m.end,
-                             r.noise_kind, f"{100 * r.noise_share:.1f}", f"{r.mean_quality:.0f}"])
+                             r.noise_kind, f"{100 * r.noise_share:.1f}", f"{r.mean_quality:.0f}",
+                             m.start_marker, m.end_marker, r.header_raw, r.header_repair])
 
 
 def build_report(path, since=None, until=None, max_gap=DEFAULT_MAX_GAP, how_many=0, csv_path=None):
@@ -377,7 +452,8 @@ def build_report(path, since=None, until=None, max_gap=DEFAULT_MAX_GAP, how_many
         write_csv(results, csv_path)
     first = f"{lines[0].time:%Y-%m-%d %H:%M:%S}" if lines else ""
     last = f"{lines[-1].time:%Y-%m-%d %H:%M:%S}" if lines else ""
-    return summarise(results, orphans, len(lines), first, last) + examples(results, how_many)
+    return (summarise(results, orphans, len(lines), first, last, count_markers(lines))
+            + examples(results, how_many))
 
 
 def main(argv=None):

@@ -183,7 +183,9 @@ data, and nothing needs Python to run the tests.
 install) that reports how well the NAVTEX messages in a decoder database were
 received: how many have an intact `ZCZC` header, how many end with `NNNN`, and
 how noisy they are. It opens the database read-only, so it is safe to run
-while the decoder is writing to it.
+while the decoder is writing to it. Markers that arrived in figures mode
+(`+:+:` for `ZCZC`, `,,,,` for `NNNN`) are recognised too, and the header after
+a shifted `ZCZC` is decoded back to letters (the raw header is kept alongside).
 
 ```
 python tools/navtex_report.py 490kHz.db
