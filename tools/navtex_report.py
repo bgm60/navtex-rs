@@ -19,6 +19,7 @@ Usage:
     python tools/navtex_report.py 490kHz.db
     python tools/navtex_report.py 490kHz.db --since 2026-10-01 --until 2026-10-08
     python tools/navtex_report.py 490kHz.db --examples 3 --csv messages.csv
+    python tools/navtex_report.py 490kHz.db --since 2026-10-01 --format log.txt
 
     --since T, --until T   only lines from T (inclusive) to T (exclusive);
                            T is a UTC time such as 2026-10-01 or
@@ -27,8 +28,32 @@ Usage:
                            header problem and each kind of ending (default 0)
     --csv FILE             write one row per message, to look at in a
                            spreadsheet or database viewer
+    --format FILE          write the whole log (obeying --since and --until)
+                           with the messages marked out; see "The formatted
+                           log" below
     --max-gap SECONDS      a message with no new line for this long is taken
                            to have ended (default 600)
+
+The formatted log
+-----------------
+--format FILE writes every row of the database in the range, in order, in
+blocks. A message is a header line, a blank line, its rows, a blank line:
+
+    >>> ZCZC, NNNN, QA91, none, exact, ZCZC
+
+    [2026-11-01 18:40:22 77]<TAB>ZCZC QA91
+    [2026-11-01 18:40:24 85]<TAB>011840 UTC NOV 26
+    ...
+
+The header line holds start_marker, end_marker, header_raw, header_repair,
+start_kind and start_received (the same as the CSV columns). end_marker is
+empty for a message that ended without an NNNN. Each row is
+[time quality], a TAB, then the text as stored. Rows that belong to no
+message are written in the same way under a ">>> FRAGMENT" line. A row that
+holds the end of one message and the start of the next is written in both.
+Characters below a space, and DEL (such as the BEL that a figure-mode J
+produces), are written as \\xNN, so the file is safe to display; the database
+is not changed. The file uses the computer's normal line endings.
 
 What the words mean
 -------------------
@@ -419,6 +444,55 @@ def count_markers(lines):
     return counts
 
 
+class OutputError(Exception):
+    """An output file could not be written."""
+
+
+CONTROL = re.compile("[\x00-\x1f\x7f]")
+
+
+def escape(text):
+    """Control characters as \\xNN (lower case), everything else as it is."""
+    return CONTROL.sub(lambda match: f"\\x{ord(match.group()):02x}", text)
+
+
+def log_row(line):
+    return f"[{line.time:%Y-%m-%d %H:%M:%S} {line.quality}]\t{escape(line.text)}"
+
+
+def log_blocks(lines, results):
+    """Yields (header, rows) for the whole log, in order: each message, and
+    each stretch of rows that belong to no message (header ">>> FRAGMENT").
+    A row shared by two messages is in both."""
+    index = {line.id: number for number, line in enumerate(lines)}
+    cursor = 0  # the first row not yet part of any block
+    for result in results:
+        message = result.message
+        first, last = index[message.start_id], index[message.end_id]
+        if first > cursor:
+            yield ">>> FRAGMENT", lines[cursor:first]
+        fields = [message.start_marker, message.end_marker, result.header_raw, result.header_repair,
+                  "damaged" if message.start_damaged else "exact", message.start_received]
+        yield ">>> " + ", ".join(escape(field) for field in fields), lines[first:last + 1]
+        cursor = last + 1  # a message never starts before the previous one ended
+    if cursor < len(lines):
+        yield ">>> FRAGMENT", lines[cursor:]
+
+
+def write_log(lines, results, path):
+    """Writes the formatted log (see the top of the file)."""
+    try:
+        # backslashreplace: a character that cannot be encoded is written as an escape.
+        with open(path, "w", encoding="utf-8", errors="backslashreplace") as handle:
+            for header, rows in log_blocks(lines, results):
+                handle.write(header + "\n\n")
+                for line in rows:
+                    handle.write(log_row(line) + "\n")
+                handle.write("\n")
+    except OSError as error:
+        raise OutputError(f"{path}: {error}") from error
+
+
 # ---------------------------------------------------------------------------
 # The report
 # ---------------------------------------------------------------------------
@@ -505,13 +579,16 @@ def write_csv(results, path):
                              "damaged" if m.start_damaged else "exact", m.start_received])
 
 
-def build_report(path, since=None, until=None, max_gap=DEFAULT_MAX_GAP, how_many=0, csv_path=None):
+def build_report(path, since=None, until=None, max_gap=DEFAULT_MAX_GAP, how_many=0, csv_path=None,
+                 format_path=None):
     """Returns the report as a list of lines."""
     lines = list(read_lines(path, since, until))
     messages, orphans = segment(lines, max_gap)
     results = classify(messages)
     if csv_path:
         write_csv(results, csv_path)
+    if format_path:
+        write_log(lines, results, format_path)
     first = f"{lines[0].time:%Y-%m-%d %H:%M:%S}" if lines else ""
     last = f"{lines[-1].time:%Y-%m-%d %H:%M:%S}" if lines else ""
     return (summarise(results, orphans, len(lines), first, last, count_markers(lines))
@@ -525,13 +602,18 @@ def main(argv=None):
     parser.add_argument("--until", type=parse_time)
     parser.add_argument("--examples", type=int, default=0, metavar="N")
     parser.add_argument("--csv", metavar="FILE")
+    parser.add_argument("--format", metavar="FILE")
     parser.add_argument("--max-gap", type=int, default=DEFAULT_MAX_GAP, metavar="SECONDS")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exit:
         return exit.code if isinstance(exit.code, int) else 2
     try:
-        report = build_report(args.database, args.since, args.until, args.max_gap, args.examples, args.csv)
+        report = build_report(args.database, args.since, args.until, args.max_gap, args.examples, args.csv,
+                              args.format)
+    except OutputError as error:
+        print(error, file=sys.stderr)
+        return 1
     except (sqlite3.Error, OSError) as error:
         print(f"{args.database}: {error}", file=sys.stderr)
         return 1

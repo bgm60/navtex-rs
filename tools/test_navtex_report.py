@@ -525,6 +525,161 @@ class Reporting(unittest.TestCase):
             report.parse_time("yesterday")
 
 
+class FormattedLog(unittest.TestCase):
+    def log(self, rows, **options):
+        """The formatted log of these rows, as text with \\n line ends, and the rows' ids."""
+        path = make_db(rows)
+        target = path + ".log"
+        self.addCleanup(os.remove, path)
+        self.addCleanup(lambda: os.path.exists(target) and os.remove(target))
+        report.build_report(path, format_path=target, **options)
+        with open(target, encoding="utf-8") as handle:  # universal newlines: \\n on any computer
+            return handle.read()
+
+    def test_the_example_from_the_specification(self):
+        rows = [(0, 77, "ZCZC QA91"), (2, 85, "011840 UTC NOV 26"), (5, 85, "SPLIT RADIO"),
+                (8, 82, "UNTIL FURTHER NOTICE, M/V MICOPERI TRENTA 45-03,7N 013-07,6E (WGS84)."),
+                (40, 94, "NNNN")]
+        self.assertEqual(self.log(rows), "\n".join([
+            ">>> ZCZC, NNNN, QA91, none, exact, ZCZC",
+            "",
+            "[2026-10-18 12:00:00 77]\tZCZC QA91",
+            "[2026-10-18 12:00:02 85]\t011840 UTC NOV 26",
+            "[2026-10-18 12:00:05 85]\tSPLIT RADIO",
+            "[2026-10-18 12:00:08 82]\tUNTIL FURTHER NOTICE, M/V MICOPERI TRENTA 45-03,7N 013-07,6E (WGS84).",
+            "[2026-10-18 12:00:40 94]\tNNNN",
+            "", ""]))
+
+    def test_a_message_with_no_end_marker_has_an_empty_end_field_and_ends_at_its_last_row(self):
+        text = self.log(lines("ZCZC BA91", TEXT, start=0) + lines("later", start=2000))
+        self.assertTrue(text.startswith(">>> ZCZC, , BA91, none, exact, ZCZC\n\n"))
+        block = text.split("\n\n")[1].splitlines()
+        self.assertEqual(len(block), 2)
+        self.assertTrue(text.endswith("\tlater\n\n"))
+        self.assertIn(">>> FRAGMENT\n\n[2026-10-18 12:33:20 50]\tlater", text)
+
+    def test_a_row_shared_by_two_messages_is_in_both(self):
+        text = self.log(lines("ZCZC BA91", TEXT, "THE END NNNN ZCZC EA13", TEXT, "NNNN"))
+        blocks = text.strip("\n").split("\n\n")
+        self.assertEqual(blocks[0], ">>> ZCZC, NNNN, BA91, none, exact, ZCZC")
+        self.assertEqual(blocks[2], ">>> ZCZC, NNNN, EA13, none, exact, ZCZC")
+        self.assertEqual(blocks[1].count("THE END NNNN ZCZC EA13"), 1)
+        self.assertEqual(blocks[3].splitlines()[0].split("\t")[1], "THE END NNNN ZCZC EA13")
+        self.assertEqual(text.count("THE END NNNN ZCZC EA13"), 2)
+
+    def test_rows_outside_messages_are_fragments(self):
+        rows = lines("noise", "NNNN", "ZCZC BA91", TEXT, "NNNN", "more noise", "NNNN", start=0)
+        text = self.log(rows)
+        blocks = text.strip("\n").split("\n\n")
+        self.assertEqual(blocks[0], ">>> FRAGMENT")
+        self.assertEqual([l.split("\t")[1] for l in blocks[1].splitlines()], ["noise", "NNNN"])
+        self.assertTrue(blocks[2].startswith(">>> ZCZC, NNNN, BA91"))
+        self.assertEqual(blocks[4], ">>> FRAGMENT")
+        self.assertEqual([l.split("\t")[1] for l in blocks[5].splitlines()], ["more noise", "NNNN"])
+
+    def test_every_row_is_written_and_rows_outside_messages_exactly_once(self):
+        rows = lines("x1", "ZCZC BA91", TEXT, "NNNN ZCZC EA13", TEXT, "NNNN", "x2", "x3", "ZCZC BA92", TEXT, "NNNN", "x4")
+        text = self.log(rows)
+        for number, (_, _, row_text) in enumerate(rows):
+            count = text.count("\t" + row_text + "\n")
+            expected = 2 if row_text.startswith("NNNN ZCZC") else 1 if row_text in ("x1", "x2", "x3", "x4") else None
+            with self.subTest(row=row_text):
+                if expected:
+                    self.assertEqual(count, expected)
+                else:
+                    self.assertGreaterEqual(count, 1)
+        order = [l[1:20] for l in text.splitlines() if l.startswith("[")]
+        self.assertEqual(order, sorted(order))
+
+    def test_since_and_until_limit_the_rows_in_the_log(self):
+        rows = lines("ZCZC BA91", TEXT, "NNNN", start=0) + lines("ZCZC EA13", TEXT, "NNNN", start=120)
+        text = self.log(rows, since=report.parse_time("2026-10-18 12:01:00"))
+        self.assertNotIn("BA91", text)
+        self.assertIn(">>> ZCZC, NNNN, EA13", text)
+        self.assertEqual(self.log(rows, since=report.parse_time("2027-01-01")), "")
+
+    def test_an_empty_database_gives_an_empty_file(self):
+        self.assertEqual(self.log([]), "")
+
+    def test_control_characters_are_written_as_escapes_in_the_text_and_the_header_line(self):
+        rows = lines("+:+: \x07-13", "A\tB\x7fC \x07 \x00", "NNNN")
+        text = self.log(rows)
+        self.assertIn(">>> +:+:, NNNN, \\x07-13, figures, exact, +:+:\n", text)
+        self.assertIn("\t+:+: \\x07-13\n", text)
+        self.assertIn("\tA\\x09B\\x7fC \\x07 \\x00\n", text)
+        # the only control characters left are the line ends and the one TAB after each [time quality]
+        self.assertEqual(re.findall("[\x00-\x08\x0b-\x1f\x7f]", text), [])
+        for row in (l for l in text.splitlines() if l.startswith("[")):
+            self.assertEqual(row.count("\t"), 1)
+
+    def test_a_comma_in_the_raw_header_is_kept(self):
+        text = self.log(lines("+:+: ,-72", BODY, TEXT, ",,,,"))
+        self.assertTrue(text.startswith(">>> +:+:, ,,,,, ,-72, figures, exact, +:+:\n"))
+
+    def test_the_header_line_holds_the_same_values_as_the_csv(self):
+        rows = (lines("ZCZC BA91", TEXT, "NNNN") + lines("ZCZ~ EA13", TEXT, "NNNN", start=60) +
+                lines("+:+: 2-68", TEXT, start=120) + lines("ZCZC MZOI", TEXT, "NNNN", start=2000))
+        path = make_db(rows)
+        target = path + ".csv"
+        self.addCleanup(os.remove, path)
+        self.addCleanup(os.remove, target)
+        log_path = path + ".log"
+        self.addCleanup(os.remove, log_path)
+        report.build_report(path, csv_path=target, format_path=log_path)
+        with open(target, newline="", encoding="utf-8") as handle:
+            csv_rows = list(csv.DictReader(handle))
+        with open(log_path, encoding="utf-8") as handle:
+            headers = [l for l in handle.read().splitlines() if l.startswith(">>> ") and "FRAGMENT" not in l]
+        expected = [">>> " + ", ".join([r["start_marker"], r["end_marker"], r["header_raw"], r["header_repair"],
+                                        r["start_kind"], r["start_received"]]) for r in csv_rows]
+        self.assertEqual(headers, expected)
+        self.assertIn(">>> ZCZC, NNNN, EA13, none, damaged, ZCZ~", headers)
+        self.assertIn(">>> ZCZC, NNNN, MZOI, digits_as_letters, exact, ZCZC", headers)
+
+    def test_the_database_is_not_changed_and_the_report_is_unaffected(self):
+        rows = lines("ZCZC BA91", TEXT, "NNNN")
+        path = make_db(rows)
+        self.addCleanup(os.remove, path)
+        self.addCleanup(lambda: os.path.exists(path + ".log") and os.remove(path + ".log"))
+        before = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        plain = report.build_report(path)
+        with_log = report.build_report(path, format_path=path + ".log")
+        self.assertEqual(plain, with_log)
+        self.assertEqual(hashlib.sha256(Path(path).read_bytes()).hexdigest(), before)
+
+    def test_an_existing_file_is_replaced(self):
+        path = make_db(lines("ZCZC BA91", TEXT, "NNNN"))
+        target = path + ".log"
+        self.addCleanup(os.remove, path)
+        self.addCleanup(os.remove, target)
+        Path(target).write_text("old contents that are longer than the new log would be? " * 400)
+        report.build_report(path, format_path=target)
+        self.assertTrue(Path(target).read_text(encoding="utf-8").startswith(">>> ZCZC"))
+        self.assertNotIn("old contents", Path(target).read_text(encoding="utf-8"))
+
+    def test_the_command_line_option_writes_the_log_and_still_prints_the_report(self):
+        path = make_db(lines("ZCZC BA91", TEXT, "NNNN"))
+        target = path + ".log"
+        self.addCleanup(os.remove, path)
+        self.addCleanup(os.remove, target)
+        code, out, err = CommandLine.run_main(self, path, "--format", target)
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("Messages (ZCZC seen): 1", out)
+        self.assertTrue(Path(target).read_text(encoding="utf-8").startswith(">>> ZCZC, NNNN, BA91"))
+
+    def test_a_log_that_cannot_be_written_gives_status_1_and_names_the_file(self):
+        path = make_db(lines("ZCZC BA91", TEXT, "NNNN"))
+        self.addCleanup(os.remove, path)
+        bad = str(Path(tempfile.gettempdir()) / "no_such_folder" / "log.txt")
+        code, out, err = CommandLine.run_main(self, path, "--format", bad)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("log.txt", err)
+        self.assertNotIn(Path(path).name, err)
+
+    def test_format_needs_a_file_name(self):
+        self.assertEqual(CommandLine.run_main(self, "x.db", "--format")[0], 2)
+
+
 class Safety(unittest.TestCase):
     def test_the_database_is_not_changed_by_a_report(self):
         path = make_db(lines("ZCZC BA91", TEXT, "NNNN"))

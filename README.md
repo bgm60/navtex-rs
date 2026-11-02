@@ -192,8 +192,12 @@ only when a valid header follows it on the same line.
 ```
 python tools/navtex_report.py 490kHz.db
 python tools/navtex_report.py 490kHz.db --since 2026-10-01 --examples 3 --csv messages.csv
+python tools/navtex_report.py 490kHz.db --since 2026-10-01 --format log.txt
 python tools/test_navtex_report.py
 ```
+
+`--format FILE` also writes the whole log with each message marked out under a
+`>>>` line (rows outside messages go under `>>> FRAGMENT`).
 
 See the top of the script for what the categories mean.
 
