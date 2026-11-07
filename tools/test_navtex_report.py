@@ -219,9 +219,9 @@ class ShiftedMarkers(unittest.TestCase):
         self.assertEqual((r.header, r.header_raw, r.header_repair), ("BA91", "BA91", "none"))
 
     def test_the_figure_table_agrees_with_the_decoders_charset(self):
-        source = Path(__file__).resolve().parent.parent / "navtex-core" / "src" / "charset.rs"
+        source = Path(__file__).resolve().parent.parent / "navwhisper-core" / "src" / "charset.rs"
         if not source.exists():
-            self.skipTest("navtex-core/src/charset.rs is not next to the tools folder")
+            self.skipTest("navwhisper-core/src/charset.rs is not next to the tools folder")
         found = re.findall(r"\(0b[01]+, '(.)', Some\('(\\x07|\\'|.)'\)\)", source.read_text(encoding="utf-8"))
         table = {letter: "\x07" if figure == "\\x07" else figure.replace("\\'", "'") for letter, figure in found}
         self.assertEqual(len(table), 22)  # D, F, G, H have no figure

@@ -6,19 +6,19 @@
 
 use clap::error::ErrorKind;
 use clap::{CommandFactory, Parser};
-use navtex_cli::audio::{self, LiveSource};
-use navtex_cli::config::{self, Mode, Profile};
-use navtex_cli::console::ConsoleSink;
-use navtex_cli::level::run_level;
-use navtex_cli::lines::{LineAssembler, LineSink};
-use navtex_cli::pipeline::Pipeline;
-use navtex_cli::run::run;
-use navtex_cli::source::AudioSource;
-use navtex_cli::sqlitelog::SqliteLogSink;
-use navtex_cli::textlog::TextLogSink;
-use navtex_cli::wav::WavSource;
-use navtex_core::frontend::FrontEndConfig;
-use navtex_core::params::SoftLockParams;
+use navwhisper_cli::audio::{self, LiveSource};
+use navwhisper_cli::config::{self, Mode, Profile};
+use navwhisper_cli::console::ConsoleSink;
+use navwhisper_cli::level::run_level;
+use navwhisper_cli::lines::{LineAssembler, LineSink};
+use navwhisper_cli::pipeline::Pipeline;
+use navwhisper_cli::run::run;
+use navwhisper_cli::source::AudioSource;
+use navwhisper_cli::sqlitelog::SqliteLogSink;
+use navwhisper_cli::textlog::TextLogSink;
+use navwhisper_cli::wav::WavSource;
+use navwhisper_core::frontend::FrontEndConfig;
+use navwhisper_core::params::SoftLockParams;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -35,7 +35,7 @@ the settings. Ctrl+C stops decoding cleanly (exit status 0).";
 
 /// Decodes NAVTEX (SITOR-B, 100 baud FSK) transmissions.
 #[derive(Parser)]
-#[command(name = "navtex-cli", version, after_help = AFTER_HELP)]
+#[command(name = "navwhisper", version, after_help = AFTER_HELP)]
 struct Cli {
     /// Name of the profile (a [section]) to use from the settings file
     profile: Option<String>,

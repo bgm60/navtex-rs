@@ -1,13 +1,13 @@
-# NAVTEX decoder (navtex-cli) - example settings.
+# NavWhisper (navwhisper) - example settings.
 #
 # Copy this file to navtex.toml (the default for --config) and edit it.
-# Run a profile with:   navtex-cli <profile> [--config navtex.toml]
+# Run a profile with:   navwhisper <profile> [--config navtex.toml]
 #
 # Each [section] is one self-contained profile. A key you leave out takes
 # the built-in default shown in the comments. Paths in single quotes ('...')
 # are taken literally, which is the easiest way to write a Windows path.
 
-# --- Live decoding from a sound card (see: navtex-cli --list-devices) ---
+# --- Live decoding from a sound card (see: navwhisper --list-devices) ---
 [live]
 mode = "live"
 # device = 2                 # its number in --list-devices, or part of its name;

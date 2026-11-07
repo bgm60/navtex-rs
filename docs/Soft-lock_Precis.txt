@@ -1,0 +1,5 @@
+Soft-lock: A Precis
+
+Every NAVTEX character is sent twice, 350 ms apart, but nothing says where characters begin. So the decoder tries all 14 possible starting positions. For each one it asks: do the groups of bits that would be a character and its repeat match?
+
+The wrong positions compare unrelated bits, so they match only by chance. The right position matches a little better each time. One comparison is far too noisy to trust, but after about six seconds the right position has clearly pulled ahead, and the decoder locks onto it and reads the text.

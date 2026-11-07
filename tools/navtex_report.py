@@ -7,7 +7,7 @@
 Message-quality report for a NAVTEX decoder database
 ====================================================
 
-Reads the `navtex_log` table written by navtex-cli and reports how well the
+Reads the `navtex_log` table written by navwhisper and reports how well the
 NAVTEX messages in it were received: how many have an intact header
 (ZCZC B1B2B3B4), how many end with NNNN, and how noisy their text is.
 

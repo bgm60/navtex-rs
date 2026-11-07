@@ -487,20 +487,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
-name = "navtex-cli"
+name = "navwhisper-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
  "cpal",
  "ctrlc",
  "hound",
- "navtex-core",
+ "navwhisper-core",
  "rusqlite",
  "toml",
 ]
 
 [[package]]
-name = "navtex-core"
+name = "navwhisper-core"
 version = "0.1.0"
 dependencies = [
  "hound",

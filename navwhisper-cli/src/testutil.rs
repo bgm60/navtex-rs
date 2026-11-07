@@ -1,7 +1,7 @@
 //! Helpers for the tests that read the reference files in `test-vectors/`.
 //! Only compiled for `cargo test`.
 //!
-//! (`navtex-core` has similar helpers, but those are private to its own
+//! (`navwhisper-core` has similar helpers, but those are private to its own
 //! tests, so the few that are needed here are repeated.)
 
 use crate::lines::{LineSink, SinkResult};
@@ -188,7 +188,7 @@ impl TempDir {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("navtex-cli-test-{}-{n}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("navwhisper-cli-test-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&path).expect("cannot create a temporary folder");
         TempDir(path)
     }

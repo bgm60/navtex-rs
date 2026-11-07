@@ -181,10 +181,10 @@ const LOCK_REASON: &str = "the character-sync and FEC-lock settings are not used
 /// Settings that older files contain. They are type-checked like Python does,
 /// then ignored with a warning.
 const IGNORED: &[(&str, Kind, &str)] = &[
-    ("weak_signal_lock", Kind::Bool, "navtex-cli always uses the weak-signal lock"),
-    ("engine", Kind::Str, "navtex-cli always uses the Rust decoder"),
-    ("window_type", Kind::Str, "navtex-cli always uses the Hamming window"),
-    ("oversample", Kind::Int, "navtex-cli always uses 8x oversampling"),
+    ("weak_signal_lock", Kind::Bool, "navwhisper always uses the weak-signal lock"),
+    ("engine", Kind::Str, "navwhisper always uses the Rust decoder"),
+    ("window_type", Kind::Str, "navwhisper always uses the Hamming window"),
+    ("oversample", Kind::Int, "navwhisper always uses 8x oversampling"),
     ("sync_window", Kind::Int, LOCK_REASON),
     ("char_acquire_threshold", Kind::Float, LOCK_REASON),
     ("char_drop_threshold", Kind::Float, LOCK_REASON),
@@ -320,18 +320,18 @@ pub fn parse_profile(text: &str, config_path: &str, profile_name: &str) -> Resul
     // Python's own check of the engine name is not repeated here: any value of
     // the right type is ignored.
     if !weak_signal_lock {
-        return Err("weak_signal_lock = false is not supported: navtex-cli has only the \
+        return Err("weak_signal_lock = false is not supported: navwhisper has only the \
                     weak-signal lock (remove the key or set it to true)"
             .to_string());
     }
     if window_type != "hamming" {
         return Err(format!(
-            "window_type = {} is not supported: navtex-cli implements only \"hamming\"",
+            "window_type = {} is not supported: navwhisper implements only \"hamming\"",
             py_str_repr(&window_type)
         ));
     }
     if oversample != 8 {
-        return Err(format!("oversample = {oversample} is not supported: navtex-cli implements only 8"));
+        return Err(format!("oversample = {oversample} is not supported: navwhisper implements only 8"));
     }
     if new_window_key && old_window_key {
         return Err(format!(
@@ -669,11 +669,11 @@ mod tests {
         assert!(err("[p]\nweak_signal_lock = false\n").starts_with("weak_signal_lock = false is not supported"));
         assert_eq!(
             err("[p]\nwindow_type = \"hann\"\n"),
-            "window_type = 'hann' is not supported: navtex-cli implements only \"hamming\""
+            "window_type = 'hann' is not supported: navwhisper implements only \"hamming\""
         );
         assert_eq!(
             err("[p]\noversample = 4\n"),
-            "oversample = 4 is not supported: navtex-cli implements only 8"
+            "oversample = 4 is not supported: navwhisper implements only 8"
         );
         assert_eq!(
             err("[p]\nsample_rate = 44100\n"),

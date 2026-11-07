@@ -6,7 +6,7 @@
 //!                              +-> QualityMeter (read when a line starts)
 //! ```
 //!
-//! `navtex-core` has a `Decoder` that joins the first three stages, but it
+//! `navwhisper-core` has a `Decoder` that joins the first three stages, but it
 //! hands back a whole chunk's worth of results at once. This program needs
 //! the quality reading *as it was when each character came out*, so the
 //! pieces are driven here one bit decision at a time, exactly as the
@@ -15,11 +15,11 @@
 
 use crate::lines::LineAssembler;
 use crate::quality::{DEFAULT_WINDOW, QualityMeter};
-use navtex_core::bitsync::DEFAULT_LOOP_GAIN;
-use navtex_core::demod::Demodulator;
-use navtex_core::frontend::FrontEndConfig;
-use navtex_core::params::SoftLockParams;
-use navtex_core::softlock::{LockEvent, SoftLock};
+use navwhisper_core::bitsync::DEFAULT_LOOP_GAIN;
+use navwhisper_core::demod::Demodulator;
+use navwhisper_core::frontend::FrontEndConfig;
+use navwhisper_core::params::SoftLockParams;
+use navwhisper_core::softlock::{LockEvent, SoftLock};
 
 pub struct Pipeline {
     demodulator: Demodulator,

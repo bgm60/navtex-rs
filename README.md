@@ -1,4 +1,4 @@
-# NAVTEX decoder (Rust)
+# NavWhisper
 
 A command-line decoder for NAVTEX, the maritime safety broadcast service. It
 takes audio from a receiver, either live from a sound-card input or from a
@@ -21,11 +21,11 @@ You need the Rust toolchain (<https://rustup.rs>). Then, from this folder:
 cargo build --release
 ```
 
-The program is `target/release/navtex-cli` (`navtex-cli.exe` on Windows). To
+The program is `target/release/navwhisper` (`navwhisper.exe` on Windows). To
 install it somewhere on your path instead:
 
 ```
-cargo install --path navtex-cli
+cargo install --path navwhisper-cli
 ```
 
 SQLite is built into the program, so nothing else needs installing on Windows.
@@ -35,10 +35,10 @@ and Ubuntu, `alsa-lib-devel` on Fedora).
 ## Quick start
 
 ```
-navtex-cli --list-devices                   # the audio inputs, numbered
-navtex-cli --wav recording.wav              # decode a recording to the console
-navtex-cli live --config navtex.toml        # decode live, using the profile "live"
-navtex-cli live --config navtex.toml --level   # check the input level first
+navwhisper --list-devices                   # the audio inputs, numbered
+navwhisper --wav recording.wav              # decode a recording to the console
+navwhisper live --config navtex.toml        # decode live, using the profile "live"
+navwhisper live --config navtex.toml --level   # check the input level first
 ```
 
 `navtex.example.toml` is a ready-made settings file: copy it to `navtex.toml`
@@ -49,7 +49,7 @@ user.`, on the console normally and on the error stream in quiet mode.
 ## Command line
 
 ```
-navtex-cli [OPTIONS] [PROFILE]
+navwhisper [OPTIONS] [PROFILE]
 ```
 
 | Option | Meaning |
@@ -205,8 +205,8 @@ See the top of the script for what the categories mean.
 
 | Folder | Contents |
 |---|---|
-| `navtex-core/` | The decoder: front end, tone detection, bit clock, soft lock, character set. No dependencies. |
-| `navtex-cli/` | The program: settings, quality meter, line assembly, console, text log, database, WAV and live audio, level meter. |
+| `navwhisper-core/` | The decoder: front end, tone detection, bit clock, soft lock, character set. No dependencies. |
+| `navwhisper-cli/` | The program: settings, quality meter, line assembly, console, text log, database, WAV and live audio, level meter. |
 | `tools/` | Analysis scripts that read the decoder's databases (Python). |
 | `test-vectors/` | Reference recordings and the expected results. |
 

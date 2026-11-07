@@ -1,4 +1,4 @@
-//! Tests of the finished program: they run the real `navtex-cli` executable.
+//! Tests of the finished program: they run the real `navwhisper` executable.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -6,7 +6,7 @@ use std::process::{Command, Output};
 const CLIP: &str = "scen_two_messages";
 
 fn run_cli(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_navtex-cli")).args(args).output().expect("cannot run navtex-cli")
+    Command::new(env!("CARGO_BIN_EXE_navwhisper")).args(args).output().expect("cannot run navwhisper")
 }
 
 fn vectors() -> PathBuf {
@@ -37,7 +37,7 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("navtex-cli-it-{}-{name}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("navwhisper-cli-it-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
         TempDir(path)
     }
@@ -86,7 +86,7 @@ fn help_succeeds_and_describes_the_options() {
         assert!(output.status.success());
         let text = stdout(&output);
         for want in [
-            "Usage: navtex-cli", "--wav <FILE>", "--config <PATH>", "--quiet", "--no-quiet", "--list-devices", "--level",
+            "Usage: navwhisper", "--wav <FILE>", "--config <PATH>", "--quiet", "--no-quiet", "--list-devices", "--level",
             "Exit status", "Ctrl+C",
         ] {
             assert!(text.contains(want), "{flag}: missing {want:?} in\n{text}");
@@ -465,7 +465,7 @@ fn ctrl_c_stops_decoding_cleanly_and_keeps_the_logs() {
     let config = write_config(&dir, &format!("mode = 'file'\nwav_file = {}\ndb_file = {}\n", literal(&fifo), literal(&db)));
     let bytes = std::fs::read(vectors().join("real_clip1").join("input.wav")).unwrap();
 
-    let child = Command::new(env!("CARGO_BIN_EXE_navtex-cli"))
+    let child = Command::new(env!("CARGO_BIN_EXE_navwhisper"))
         .args(["p", "--config", &config])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -519,7 +519,7 @@ fn ctrl_c_in_quiet_mode_says_stopped_by_user_on_stderr_only() {
     let config = write_config(&dir, &format!("mode = 'file'\nwav_file = {}\ndb_file = {}\n", literal(&fifo), literal(&db)));
     let bytes = std::fs::read(vectors().join("real_clip1").join("input.wav")).unwrap();
 
-    let child = Command::new(env!("CARGO_BIN_EXE_navtex-cli"))
+    let child = Command::new(env!("CARGO_BIN_EXE_navwhisper"))
         .args(["p", "--config", &config, "--quiet"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

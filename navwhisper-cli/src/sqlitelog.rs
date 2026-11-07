@@ -507,7 +507,7 @@ mod tests {
     /// Checks a database made by the Python program, named by the
     /// NAVTEX_COMPAT_DB environment variable (see rust/tools/check_db.py and
     /// the step 3 notes); skipped unless that is set. Run with
-    /// `cargo test --release -p navtex-cli -- --ignored`.
+    /// `cargo test --release -p navwhisper-cli -- --ignored`.
     #[test]
     #[ignore = "needs NAVTEX_COMPAT_DB, a database written by the Python program"]
     fn appends_to_a_database_written_by_the_python_program() {
